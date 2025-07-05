@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+supabase
+pandas
+numpy
+python-dotenv
+scikit-learn
+tensorflow
