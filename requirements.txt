@@ -1,8 +1,9 @@
 fastapi
-uvicorn
+uvicorn[standard]
 supabase
 pandas
 numpy
 python-dotenv
-scikit-learn
+scikit-learn==1.3.2
 tensorflow==2.15.0
+
