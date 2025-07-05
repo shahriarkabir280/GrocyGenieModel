@@ -1,8 +1,3 @@
-# ===============================
-# 1. INSTALLATION & SETUP
-# ===============================
-!pip install supabase --quiet
-!pip install python-dotenv --quiet
 
 import os
 import random
@@ -16,14 +11,7 @@ import tensorflow as tf
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.layers import Input, LSTM, Dense
 
-# ===============================
-# 2. CONFIGURATION (Env Setup)
-# ===============================
-load_dotenv()
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ===============================
 # 3. CONSTANTS & ENCODING
