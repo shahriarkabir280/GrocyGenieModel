@@ -134,7 +134,7 @@ def store_predictions(user_id, predictions, user_input):
 # ===============================
 # 5. MODELING
 # ===============================
-def prepare_data(df, products):
+'''def prepare_data(df, products):
     global le_product, scaler
     le_product = LabelEncoder().fit(products)
     df['region_enc'] = le_region.transform(df['region'])
@@ -163,7 +163,44 @@ def prepare_data(df, products):
             y2.append(err[i+seq_len])
             y3.append(days[i+seq_len])
     return np.array(X), np.array(y1), np.array(y2), np.array(y3), scaler_local
+'''
 
+def prepare_data(df, products):
+    global le_product, scaler
+    le_product = LabelEncoder().fit(products)
+    df['region_enc'] = le_region.transform(df['region'])
+    df['season_enc'] = le_season.transform(df['season'])
+    df['event_enc'] = le_event.transform(df['event'])
+    df['product_enc'] = le_product.transform(df['product'])
+
+    df['date'] = pd.to_datetime(df['date'])
+    df = df.sort_values('date')
+
+    if scaler is None:
+        scaler_local = MinMaxScaler()
+        df[['adult_male','adult_female','child','consumption']] = scaler_local.fit_transform(df[['adult_male','adult_female','child','consumption']])
+    else:
+        scaler_local = scaler
+        df[['adult_male','adult_female','child','consumption']] = scaler_local.transform(df[['adult_male','adult_female','child','consumption']])
+
+    X, y1, y2, y3 = [], [], [], []
+    seq_len = 7
+    for p in df['product_enc'].unique():
+        sub = df[df['product_enc'] == p].reset_index(drop=True)
+        feats = sub[['adult_male','adult_female','child','region_enc','season_enc','event_enc','product_enc']].values
+        c = sub['consumption'].values
+        err = sub['finish_error'].values
+        days = sub['finish_days'].values
+        for i in range(len(sub) - seq_len):
+            X.append(feats[i:i + seq_len])
+            y1.append(c[i + seq_len])
+            y2.append(err[i + seq_len])
+            y3.append(days[i + seq_len])
+    return np.array(X), np.array(y1), np.array(y2), np.array(y3), scaler_local
+
+
+
+'''
 def build_model(input_shape):
     inp = Input(shape=input_shape)
     x = LSTM(64)(inp)
@@ -174,7 +211,22 @@ def build_model(input_shape):
     model = Model(inputs=inp, outputs=[out1, out2, out3])
     model.compile(optimizer='adam', loss=tf.keras.losses.MeanSquaredError())
     return model
+'''
 
+def build_model(input_shape):
+    inp = Input(shape=input_shape)  # should be (7, 7)
+    x = LSTM(64)(inp)
+    x = Dense(32, activation='relu')(x)
+    out1 = Dense(1, name='daily_consumption_output')(x)
+    out2 = Dense(1, name='finish_error_output')(x)
+    out3 = Dense(1, name='finish_days_output')(x)
+    model = Model(inputs=inp, outputs=[out1, out2, out3])
+    model.compile(optimizer='adam', loss=tf.keras.losses.MeanSquaredError())
+    return model
+
+
+
+'''
 def load_or_train_model():
     global scaler
     if not os.path.exists("initial_data.csv"):
@@ -202,6 +254,47 @@ def load_or_train_model():
         )
         model.save(model_path)
     return model
+'''
+
+def load_or_train_model():
+    global scaler
+    model_path = "global_model.h5"
+
+    # Ensure initial dataset exists
+    if not os.path.exists("initial_data.csv"):
+        pd.DataFrame(columns=['date','product','region','season','event','adult_male','adult_female','child','consumption','finish_error','finish_days']).to_csv("initial_data.csv", index=False)
+
+    df = pd.read_csv("initial_data.csv")
+    if df.empty:
+        df = generate_data(list(BASE_CONSUMPTION.keys()))
+        df.to_csv("initial_data.csv", index=False)
+
+    products = df['product'].unique().tolist()
+    
+    # Prepare training data with product_enc included
+    X, y1, y2, y3, scaler_obj = prepare_data(df, products)
+    scaler = scaler_obj
+
+    # Delete model if exists (in case it was trained on wrong shape earlier)
+    if os.path.exists(model_path):
+        os.remove(model_path)
+
+    # Build and train model
+    model = build_model((X.shape[1], X.shape[2]))  # shape (7, 7)
+    model.fit(
+        X,
+        {'daily_consumption_output': y1,
+         'finish_error_output': y2,
+         'finish_days_output': y3},
+        epochs=10,
+        batch_size=32,
+        validation_split=0.1,
+    )
+    model.save(model_path)
+    print("Model trained and saved to:", model_path)
+
+    return model
+
 
 def retrain_model_with_feedback(user_id):
     base_df = pd.read_csv("initial_data.csv")
@@ -227,6 +320,7 @@ def retrain_model_with_feedback(user_id):
 # ===============================
 # 6. PREDICTION
 # ===============================
+'''
 def predict_user_input(user_input, model):
     global le_product, scaler
     initial_df = pd.read_csv("initial_data.csv")
@@ -265,6 +359,55 @@ def predict_user_input(user_input, model):
             'predicted_finish_error': round(error, 2)
         }
     return predictions
+'''
+def predict_user_input(user_input, model):
+    global le_product, scaler
+    initial_df = pd.read_csv("initial_data.csv")
+    predictions = {}
+
+    for product in user_input['stock'].keys():
+        if is_new_product(product, initial_df):
+            generate_and_append_new_product(product)
+            initial_df = pd.read_csv("initial_data.csv")
+
+        products = initial_df['product'].unique().tolist()
+        le_product = LabelEncoder().fit(products)
+        product_enc = le_product.transform([product])[0]
+
+        vec = []
+        for _ in range(7):
+            base = calculate_base_consumption(user_input['family'], user_input['region'], user_input['season'], user_input['event'], product)
+            raw = [
+                user_input['family']['adult_male'],
+                user_input['family']['adult_female'],
+                user_input['family']['child']
+            ]
+            df_input = pd.DataFrame([raw + [base]], columns=['adult_male', 'adult_female', 'child', 'consumption'])
+            raw_scaled = scaler.transform(df_input)[0][:3]
+            region_enc = le_region.transform([user_input['region']])[0]
+            season_enc = le_season.transform([user_input['season']])[0]
+            event_enc = le_event.transform([user_input['event']])[0]
+
+            features = list(raw_scaled) + [region_enc, season_enc, event_enc, product_enc]
+            vec.append(features)
+
+        vec = np.array(vec)[np.newaxis, :, :]  # shape = (1, 7, 7)
+
+        y1, y2, y3 = model.predict(vec, verbose=0)
+        daily = float(y1[0][0])
+        error = float(y2[0][0])
+        days = float(y3[0][0])
+        finish_date = datetime.today() + timedelta(days=days)
+
+        predictions[product] = {
+            'predicted_consumption': round(daily, 3),
+            'predicted_finish_days': round(days, 2),
+            'predicted_finish_date': finish_date.strftime('%Y-%m-%d'),
+            'predicted_finish_error': round(error, 2)
+        }
+
+    return predictions
+
 
 # ===============================
 # 7. EXAMPLE RUN
