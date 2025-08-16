@@ -13,7 +13,6 @@ It leverages **Google Colab** for development and **Hugging Face** for model hos
 
 - **Predict Grocery Depletion:** Estimates the finishing date of each grocery item based on usage patterns.
 - **Personalized Tracking:** Learns from your household consumption habits.
-- **Smart Alerts:** Notifies you ahead of time so you can restock before running out.
 - **Supports Multiple Categories:** Works for perishables, dry goods, snacks, beverages, and more.
 - **Easy Integration:** Can be integrated into apps, smart fridges, or personal assistant systems.  
 
@@ -97,7 +96,7 @@ model.train(data_path="your_grocery_data.csv")
 
 - Household size (family mamber Count- Male ,Female, Children )
 
-- Optional: Expiry dates
+- Expiry dates ( Taken as feedback When needed )
 
 
 Note: Development and experimentation were done primarily on Google Colab, and the model is hosted and maintained on Hugging Face for easy integration.
@@ -132,3 +131,7 @@ This project is licensed under the MIT License – see the LICENSE file for deta
 ## Contributions
 
 Contributions, suggestions, and feature requests are welcome! Please open an issue or submit a pull request.
+## Contact
+
+
+
