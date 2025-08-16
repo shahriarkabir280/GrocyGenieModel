@@ -131,7 +131,10 @@ This project is licensed under the MIT License – see the LICENSE file for deta
 ## Contributions
 
 Contributions, suggestions, and feature requests are welcome! Please open an issue or submit a pull request.
+
 ## Contact
+- Email: **shahriarkabir280@gmail.com**
+
 
 
 
