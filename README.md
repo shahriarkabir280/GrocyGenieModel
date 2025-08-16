@@ -107,7 +107,7 @@ Note: Development and experimentation were done primarily on Google Colab, and t
 
 ## Tech Stack
 
-- Python 3.11 – Main programming language
+- Python 3.10.12 – Main programming language
 - pandas & numpy – Data manipulation
 - TensorFlow – Deep learning & model training
 - Hugging Face – Model hosting and deployment
