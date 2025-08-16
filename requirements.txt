@@ -1,8 +1,18 @@
-tensorflow==2.15.0
+fastapi==0.110.1
+uvicorn[standard]==0.29.0
+
+# TensorFlow must be upgraded due to Python 3.12 compatibility issues
+tensorflow==2.18.0
+
 scikit-learn==1.3.2
-pandas
-numpy
-python-dotenv
-supabase
-fastapi
-uvicorn
+pandas>=1.5
+numpy>=1.24
+python-dotenv>=1.0.0
+
+# Be explicit with version to avoid alpha/beta builds
+supabase==1.0.4
+
+# Pin gradio to a stable version
+gradio==4.19.2
+
+requests>=2.31
