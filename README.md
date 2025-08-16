@@ -70,10 +70,14 @@ cd GrocyGenieModel
 ```bash
 pip install -r requirements.txt
 ```
-4. Run the prediction script:
+4. Run the script ( For Google Colab ):
 ```bash
-python predict.py
+python Model.py 
 ```
+
+## Alternative Way by deploying on the HuggingFace
+You can also deploy the model on Hugging Face and run it via API.
+For this, we provide an example FastAPI app (app.py) where you can call the model through REST API requests.
 
 ## Model Training 
 The model can be retrained with your personal grocery data:
@@ -105,6 +109,7 @@ Note: Development and experimentation were done primarily on Google Colab, and t
 
 - Python 3.11 – Main programming language
 - pandas & numpy – Data manipulation
+- TensorFlow – Deep learning & model training
 - Hugging Face – Model hosting and deployment
 - Google Colab – Development and experimentation
 - Flask/FastAPI (optional) – For API deployment
