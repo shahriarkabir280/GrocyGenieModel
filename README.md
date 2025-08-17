@@ -130,8 +130,6 @@ Note: Development and experimentation were done primarily on Google Colab, and t
 - Expiry date prediction for perishable items
 - Smart analytics dashboard
 
-## License
-This project is licensed under the MIT License – see the LICENSE file for details.
 
 ## Contributions
 
