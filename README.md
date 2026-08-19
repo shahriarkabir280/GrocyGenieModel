@@ -6,6 +6,7 @@ GrocyGenieModel is an AI-powered model designed to help you manage your kitchen 
 This project is mainly built as a **side project** for our mobile app **"GrocieGenie"**.  
 It leverages **Google Colab** for development and **Hugging Face** for model hosting and deployment.  
 
+Here is the demo: https://huggingface.co/spaces/shahriar031/GrocyGenie
 
 ---
 
