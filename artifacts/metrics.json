@@ -1,0 +1,106 @@
+{
+  "model_type": "hist_gradient_boosting",
+  "trained_at": "2026-09-24T05:00:13Z",
+  "rows": 270000,
+  "train_rows": 216000,
+  "test_rows": 54000,
+  "products": [
+    "banana",
+    "beef",
+    "bread",
+    "carrot",
+    "cheese",
+    "coffee",
+    "cucumber",
+    "eggplant",
+    "fish",
+    "milk",
+    "onion",
+    "orange",
+    "potato",
+    "rice",
+    "tea"
+  ],
+  "features": [
+    "product",
+    "region",
+    "season",
+    "event",
+    "adult_male",
+    "adult_female",
+    "child",
+    "family_size",
+    "base_consumption",
+    "month",
+    "day_of_week"
+  ],
+  "metrics": {
+    "mae": 0.0435,
+    "rmse": 0.0661,
+    "r2": 0.9892,
+    "mape": 6.29,
+    "median_absolute_error": 0.0249,
+    "by_product": {
+      "banana": {
+        "mae": 0.0408,
+        "mape": 5.99
+      },
+      "beef": {
+        "mae": 0.0958,
+        "mape": 6.05
+      },
+      "bread": {
+        "mae": 0.0562,
+        "mape": 5.88
+      },
+      "carrot": {
+        "mae": 0.0291,
+        "mape": 5.98
+      },
+      "cheese": {
+        "mae": 0.015,
+        "mape": 6.64
+      },
+      "coffee": {
+        "mae": 0.0088,
+        "mape": 6.91
+      },
+      "cucumber": {
+        "mae": 0.0223,
+        "mape": 6.21
+      },
+      "eggplant": {
+        "mae": 0.0257,
+        "mape": 6.23
+      },
+      "fish": {
+        "mae": 0.078,
+        "mape": 6.1
+      },
+      "milk": {
+        "mae": 0.0731,
+        "mape": 5.93
+      },
+      "onion": {
+        "mae": 0.028,
+        "mape": 6.05
+      },
+      "orange": {
+        "mae": 0.0266,
+        "mape": 6.39
+      },
+      "potato": {
+        "mae": 0.0661,
+        "mape": 5.97
+      },
+      "rice": {
+        "mae": 0.0789,
+        "mape": 6.02
+      },
+      "tea": {
+        "mae": 0.0074,
+        "mape": 7.93
+      }
+    }
+  }
+}
