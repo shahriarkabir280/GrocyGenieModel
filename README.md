@@ -1,3 +1,14 @@
+---
+title: GrocyGenie
+emoji: 🛒
+colorFrom: green
+colorTo: blue
+sdk: docker
+app_file: app.py
+pinned: false
+license: apache-2.0
+---
+
 # GrocyGenie Model API
 
 GrocyGenie is a machine learning API that predicts when a grocery item is likely
@@ -228,4 +239,3 @@ uvicorn app:app --host 0.0.0.0 --port $PORT
 The included dataset appears synthetic or semi-synthetic. It is useful for
 building and demonstrating the ML service, but real-world performance should be
 validated with actual user consumption data before making production claims.
-
