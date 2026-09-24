@@ -1,76 +1,37 @@
 # GrocyGenie Model API
 
-GrocyGenie predicts when grocery stock is likely to run out based on product type,
-household size, location, season, household event, quantity, and purchase date.
+GrocyGenie is a machine learning API that predicts when a grocery item is likely
+to run out. It uses product details, household size, region, season, event type,
+quantity, and purchase date to estimate daily consumption and calculate a
+predicted depletion date.
 
-The project is structured as a production-style machine learning service:
+The project is built as a portfolio-ready ML service with reproducible training,
+offline evaluation, saved model artifacts, FastAPI serving, and an optional
+Supabase feedback loop.
 
-- FastAPI REST API for mobile or backend integration
-- scikit-learn training pipeline with saved artifacts
-- repeatable train/evaluate scripts
-- model metrics saved to `artifacts/metrics.json`
-- optional Supabase integration for user stock records and feedback
+## Live Demo
 
-## Project Structure
+The API is deployed on Hugging Face Spaces:
 
-```text
-.
-├── app.py                 # FastAPI app
-├── model.py               # Feature engineering, training, prediction, feedback retraining
-├── supabase_client.py     # Lazy Supabase client
-├── initial_data.csv       # Training dataset
-├── scripts/
-│   ├── train.py           # Train and save model artifacts
-│   └── evaluate.py        # Evaluate saved model on a held-out split
-├── requirements.txt
-└── runtime.txt
-```
+- Hugging Face Space: https://huggingface.co/spaces/shahriar031/GrocyGenie
+- Live API: https://shahriar031-grocygenie.hf.space
+- API Docs: https://shahriar031-grocygenie.hf.space/docs
+- Health Check: https://shahriar031-grocygenie.hf.space/health
+- Model Info: https://shahriar031-grocygenie.hf.space/model/info
+- OpenAPI Schema: https://shahriar031-grocygenie.hf.space/openapi.json
 
-## Setup
+Note: the hosted demo runs on Hugging Face free CPU hardware, so it may take a
+short time to wake up after inactivity.
 
-```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+## Features
 
-If `python3.10` is not available locally, use any Python version supported by the
-dependencies. The deployed runtime is pinned in `runtime.txt`.
-
-## Train
-
-```bash
-python scripts/train.py
-```
-
-This creates:
-
-- `artifacts/consumption_model.joblib`
-- `artifacts/metrics.json`
-
-You can also compare estimators:
-
-```bash
-python scripts/train.py --model-type random_forest
-python scripts/train.py --model-type hist_gradient_boosting
-```
-
-## Evaluate
-
-```bash
-python scripts/evaluate.py
-```
-
-The evaluation reports:
-
-- MAE: average daily-consumption error
-- RMSE: error with larger mistakes weighted more heavily
-- R2: explained variance
-- MAPE: percentage error
-- per-product MAE and MAPE
-
-These metrics make the project easier to discuss in a resume or interview because
-the model quality is measurable and reproducible.
+- Predicts grocery depletion dates from household and stock context
+- Serves predictions through a FastAPI REST API
+- Provides reproducible training and evaluation scripts
+- Saves model metrics to `artifacts/metrics.json`
+- Supports per-product performance reporting
+- Includes optional Supabase endpoints for stock persistence, feedback, and retraining
+- Can run locally without Supabase credentials for model training, evaluation, and prediction
 
 ## Model Performance
 
@@ -88,22 +49,109 @@ Interpretation: the model's daily consumption predictions are off by about
 `43.5g/day` on average, with an average percentage error of `6.29%` on the
 current dataset.
 
-## Run API
+## Tech Stack
 
-```bash
-uvicorn app:app --reload
+- Python
+- FastAPI
+- scikit-learn
+- pandas
+- NumPy
+- joblib
+- Supabase, optional
+- Hugging Face Spaces for deployment
+
+## Project Structure
+
+```text
+.
+├── app.py                 # FastAPI application and API routes
+├── model.py               # Feature engineering, training, prediction, feedback retraining
+├── supabase_client.py     # Lazy Supabase client for database-backed endpoints
+├── initial_data.csv       # Training dataset
+├── artifacts/
+│   └── metrics.json       # Saved evaluation metadata
+├── scripts/
+│   ├── train.py           # Train and save model artifacts
+│   └── evaluate.py        # Evaluate the saved model on a held-out split
+├── requirements.txt
+└── runtime.txt
 ```
 
-Open:
+## Local Setup
+
+Create and activate a virtual environment:
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+If `python3.10` is not available locally, use a Python version supported by the
+dependencies. The deployment runtime is pinned in `runtime.txt`.
+
+## Train the Model
+
+```bash
+python scripts/train.py
+```
+
+This creates:
+
+```text
+artifacts/consumption_model.joblib
+artifacts/metrics.json
+```
+
+You can also compare supported estimators:
+
+```bash
+python scripts/train.py --model-type hist_gradient_boosting
+python scripts/train.py --model-type random_forest
+```
+
+## Evaluate the Model
+
+```bash
+python scripts/evaluate.py
+```
+
+The evaluation reports MAE, RMSE, R2, MAPE, median absolute error, and
+per-product MAE/MAPE.
+
+## Run the API Locally
+
+```bash
+uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+Open the interactive docs:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-## Example Prediction
+## API Endpoints
+
+Public/local prediction endpoints:
+
+- `GET /` - root status message
+- `GET /health` - service health check
+- `GET /model/info` - trained model metadata and metrics
+- `POST /re-predict` - calculate a depletion date without writing to the database
+
+Supabase-backed endpoints:
+
+- `POST /stock/add` - add stock record and save predicted finish date
+- `POST /feedback` - record the actual finish date for a stock item
+- `POST /retrain` - retrain with verified user feedback
+
+## Example Prediction Request
+
+Live endpoint:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/re-predict \
+curl -X POST https://shahriar031-grocygenie.hf.space/re-predict \
   -H "Content-Type: application/json" \
   -d '{
     "product_name": "rice",
@@ -120,32 +168,64 @@ curl -X POST http://127.0.0.1:8000/re-predict \
   }'
 ```
 
-## Supabase Integration
+Example response:
 
-The `/stock/add`, `/feedback`, and `/retrain` endpoints use Supabase.
+```json
+{
+  "predicted_finish_date": "2026-09-27"
+}
+```
 
-Create a `.env` file:
+## Supabase Configuration
+
+Supabase is optional. You do not need it to train, evaluate, run `/health`,
+inspect `/model/info`, or use `/re-predict`.
+
+Supabase is only required for endpoints that persist or use user stock records:
+
+```text
+POST /stock/add
+POST /feedback
+POST /retrain
+```
+
+To enable those endpoints locally, create a `.env` file:
 
 ```bash
 SUPABASE_URL=your-project-url
-SUPABASE_KEY=your-service-or-anon-key
+SUPABASE_KEY=your-key
 ```
 
-Local training and evaluation do not require Supabase credentials.
+Do not commit `.env` files or private credentials.
+
+## Deployment
+
+The project is deployed on Hugging Face Spaces as a Docker/FastAPI service.
+
+The server command used by the Docker deployment is:
+
+```bash
+uvicorn app:app --host 0.0.0.0 --port 7860
+```
+
+For other hosting platforms, use the platform-provided port when available:
+
+```bash
+uvicorn app:app --host 0.0.0.0 --port $PORT
+```
 
 ## Technical Highlights
 
-This project demonstrates:
+- End-to-end ML lifecycle: data loading, feature engineering, training, evaluation, artifact saving, and API serving
+- Reproducible model evaluation with a held-out test split
+- Domain features such as family size, region, season, event, date features, and base consumption estimates
+- Clean FastAPI request validation with typed inputs
+- Optional database-backed feedback loop for future personalization
+- Public deployment with live API documentation
 
-- end-to-end ML lifecycle: training, persistence, evaluation, API serving
-- feature engineering for categorical, household, date, and domain-specific signals
-- input validation and error handling in FastAPI
-- feedback loop for improving predictions from real user outcomes
-- reproducible metrics suitable for model comparison
+## Modeling Note
 
-## Important Modeling Note
+The included dataset appears synthetic or semi-synthetic. It is useful for
+building and demonstrating the ML service, but real-world performance should be
+validated with actual user consumption data before making production claims.
 
-The included dataset appears synthetic or semi-synthetic. That is useful for
-building the system, but resume claims should focus on engineering quality and
-measured offline performance unless the model is later validated with real user
-consumption data.
