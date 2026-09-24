@@ -1,144 +1,151 @@
-# GrocyGenie - AI Model
+# GrocyGenie Model API
 
-**Predict your groceries’ finishing dates with magic!**  
-GrocyGenieModel is an AI-powered model designed to help you manage your kitchen efficiently by predicting when your grocery items are likely to run out. Say goodbye to unexpected shortages and last-minute grocery runs!  
+GrocyGenie predicts when grocery stock is likely to run out based on product type,
+household size, location, season, household event, quantity, and purchase date.
 
-This project is mainly built as a **side project** for our mobile app **"GrocieGenie"**.  
-It leverages **Google Colab** for development and **Hugging Face** for model hosting and deployment.  
+The project is structured as a production-style machine learning service:
 
-Here is the demo: https://huggingface.co/spaces/shahriar031/GrocyGenie
+- FastAPI REST API for mobile or backend integration
+- scikit-learn training pipeline with saved artifacts
+- repeatable train/evaluate scripts
+- model metrics saved to `artifacts/metrics.json`
+- optional Supabase integration for user stock records and feedback
 
----
+## Project Structure
 
-## Features
-
-- **Predict Grocery Depletion:** Estimates the finishing date of each grocery item based on usage patterns.
-- **Personalized Tracking:** Learns from your household consumption habits.
-- **Supports Multiple Categories:** Works for perishables, dry goods, snacks, beverages, and more.
-- **Easy Integration:** Can be integrated into apps, smart fridges, or personal assistant systems.  
-
----
-
-## How It Works
-
-1. **Data Collection:** Track usage frequency, purchase dates, quantities, and household size.  
-2. **Model Training:** AI model learns consumption patterns using historical data.  
-3. **Prediction:** Estimates the remaining days for each grocery item based on trends and patterns.  
-4. **Notification:** Generates alerts or reports for items that will finish soon.  
-
-The model uses advanced machine learning algorithms to capture patterns and variations in consumption, ensuring predictions are accurate and reliable.  
-
----
-
-## Example Usage
-
-```python
-from grocygenie import GrocyGenieModel
-
-# Initialize model
-model = GrocyGenieModel()
-
-# Input grocery data
-grocery_data = [
-    {"item": "Milk", "quantity": 2, "purchase_date": "2025-08-10"},
-    {"item": "Rice", "quantity": 5, "purchase_date": "2025-07-25"},
-    {"item": "Eggs", "quantity": 12, "purchase_date": "2025-08-12"},
-]
-
-# Predict finishing dates
-predictions = model.predict_finishing_dates(grocery_data)
-
-for item, finish_date in predictions.items():
-    print(f"{item} will finish on: {finish_date}")
-
-```
-## Sample Output
-
-```yaml
-Milk will finish on: 2025-08-18
-Rice will finish on: 2025-09-10
-Eggs will finish on: 2025-08-20
+```text
+.
+├── app.py                 # FastAPI app
+├── model.py               # Feature engineering, training, prediction, feedback retraining
+├── supabase_client.py     # Lazy Supabase client
+├── initial_data.csv       # Training dataset
+├── scripts/
+│   ├── train.py           # Train and save model artifacts
+│   └── evaluate.py        # Evaluate saved model on a held-out split
+├── requirements.txt
+└── runtime.txt
 ```
 
-## 🛠️ Installation
+## Setup
 
-1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/GrocyGenieModel.git
-cd GrocyGenieModel
-```
-3. Install dependencies:
-```bash
+python3.10 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
-4. Run the script ( For Google Colab ):
+
+If `python3.10` is not available locally, use any Python version supported by the
+dependencies. The deployed runtime is pinned in `runtime.txt`.
+
+## Train
+
 ```bash
-python Model.py 
+python scripts/train.py
 ```
 
-## Alternative Way by deploying on the HuggingFace
-You can also deploy the model on Hugging Face and run it via API.
-For this, we provide an example FastAPI app (app.py) where you can call the model through REST API requests.
+This creates:
 
-## Model Training 
-The model can be retrained with your personal grocery data:
+- `artifacts/consumption_model.joblib`
+- `artifacts/metrics.json`
 
-```python
-from grocygenie import GrocyGenieModel
+You can also compare estimators:
 
-model = GrocyGenieModel()
-model.train(data_path="your_grocery_data.csv")
+```bash
+python scripts/train.py --model-type random_forest
+python scripts/train.py --model-type hist_gradient_boosting
 ```
-## Supported features for training:
 
-- Item name
+## Evaluate
 
-- Quantity purchased
+```bash
+python scripts/evaluate.py
+```
 
-- Purchase date
+The evaluation reports:
 
-- Consumption frequency
+- MAE: average daily-consumption error
+- RMSE: error with larger mistakes weighted more heavily
+- R2: explained variance
+- MAPE: percentage error
+- per-product MAE and MAPE
 
-- Household size (family mamber Count- Male ,Female, Children )
+These metrics make the project easier to discuss in a resume or interview because
+the model quality is measurable and reproducible.
 
-- Expiry dates ( Taken as feedback When needed )
+## Model Performance
 
+Current performance on a held-out 20% test split from `initial_data.csv`:
 
-Note: Development and experimentation were done primarily on Google Colab, and the model is hosted and maintained on Hugging Face for easy integration.
+```text
+MAE: 0.0435 kg/day
+RMSE: 0.0661 kg/day
+R2: 0.9892
+MAPE: 6.29%
+Median Absolute Error: 0.0249 kg/day
+```
 
-## Tech Stack
+Interpretation: the model's daily consumption predictions are off by about
+`43.5g/day` on average, with an average percentage error of `6.29%` on the
+current dataset.
 
-- Python 3.10.12 – Main programming language
-- pandas & numpy – Data manipulation
-- TensorFlow – Deep learning & model training
-- Hugging Face – Model hosting and deployment
-- Google Colab – Development and experimentation
-- Flask/FastAPI (optional) – For API deployment
+## Run API
 
-## Why GrocyGenieModel?
+```bash
+uvicorn app:app --reload
+```
 
-- Avoid waste by tracking consumption patterns.
-- Save money by planning grocery purchases effectively.
-- Keep your kitchen stocked intelligently without overbuying.
-- Perfect for families, small restaurants, or personal smart kitchens.
+Open:
 
+```text
+http://127.0.0.1:8000/docs
+```
 
-## Future Improvements
+## Example Prediction
 
-- Mobile app integration with push notifications
-- Predictive restocking recommendations
-- Integration with online grocery shopping APIs
-- Expiry date prediction for perishable items
-- Smart analytics dashboard
+```bash
+curl -X POST http://127.0.0.1:8000/re-predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "product_name": "rice",
+    "quantity": 5,
+    "unit": "kg",
+    "region": "rural",
+    "season": "summer",
+    "event": "normal",
+    "family": {
+      "adult_male": 2,
+      "adult_female": 1,
+      "child": 2
+    }
+  }'
+```
 
+## Supabase Integration
 
-## Contributions
+The `/stock/add`, `/feedback`, and `/retrain` endpoints use Supabase.
 
-Contributions, suggestions, and feature requests are welcome! Please open an issue or submit a pull request.
+Create a `.env` file:
 
-## Contact
-- Email: **shahriarkabir280@gmail.com**
+```bash
+SUPABASE_URL=your-project-url
+SUPABASE_KEY=your-service-or-anon-key
+```
 
+Local training and evaluation do not require Supabase credentials.
 
+## Resume Highlights
 
+This project demonstrates:
 
+- end-to-end ML lifecycle: training, persistence, evaluation, API serving
+- feature engineering for categorical, household, date, and domain-specific signals
+- input validation and error handling in FastAPI
+- feedback loop for improving predictions from real user outcomes
+- reproducible metrics suitable for model comparison
+
+## Important Modeling Note
+
+The included dataset appears synthetic or semi-synthetic. That is useful for
+building the system, but resume claims should focus on engineering quality and
+measured offline performance unless the model is later validated with real user
+consumption data.
