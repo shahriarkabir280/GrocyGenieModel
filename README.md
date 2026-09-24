@@ -133,7 +133,7 @@ SUPABASE_KEY=your-service-or-anon-key
 
 Local training and evaluation do not require Supabase credentials.
 
-## Resume Highlights
+## Technical Highlights
 
 This project demonstrates:
 
