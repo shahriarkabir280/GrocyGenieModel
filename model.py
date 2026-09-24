@@ -1,473 +1,563 @@
-from supabase_client import supabase
+from __future__ import annotations
+
+import json
 import os
-import random
+import warnings
+import uuid
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any, Mapping
+
+os.environ.setdefault("LOKY_MAX_CPU_COUNT", "1")
+warnings.filterwarnings("ignore", message="Could not find the number of physical cores.*")
+warnings.filterwarnings("ignore", category=UserWarning, module=r"joblib\.externals\.loky\.backend\.context")
+
+import joblib
 import numpy as np
 import pandas as pd
-from datetime import datetime, timedelta, date
-from dotenv import load_dotenv
-from supabase import create_client, Client
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, LSTM, Dense
-import uuid
-import joblib
-from pathlib import Path
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
-# 3. CONSTANTS & ENCODING
+ROOT_DIR = Path(__file__).resolve().parent
+DATA_PATH = ROOT_DIR / "initial_data.csv"
+ARTIFACT_DIR = Path(os.getenv("GROCYGENIE_ARTIFACT_DIR", ROOT_DIR / "artifacts"))
+MODEL_PATH = ARTIFACT_DIR / "consumption_model.joblib"
+METRICS_PATH = ARTIFACT_DIR / "metrics.json"
 
-MODEL_PATH = "/tmp/global_model.h5"
-DATA_PATH = "/tmp/initial_data.csv"
-SCALER_PATH = "/tmp/scaler.pkl"
-
-
-REGIONS = ['urban', 'rural']
-SEASONS = ['winter', 'spring', 'summer', 'autumn']
-EVENTS = ['normal', 'fasting', 'guests', 'sickness', 'travel', 'meal_off']
-
-REGION_MULTIPLIER = {'urban': 1.0, 'rural': 1.1}
-SEASON_MULTIPLIER = {'winter': 1.1, 'spring': 1.0, 'summer': 0.9, 'autumn': 1.0}
-EVENT_MULTIPLIER = {'normal': 1.0, 'fasting': 0.7, 'guests': 1.3, 'sickness': 0.5, 'travel': 0.3, 'meal_off': 0.2}
+REGIONS = ("urban", "rural")
+SEASONS = ("winter", "spring", "summer", "autumn")
+EVENTS = ("normal", "fasting", "guests", "sickness", "travel", "meal_off")
 
 BASE_CONSUMPTION = {
-    'rice': {'adult_male': 0.3, 'adult_female': 0.25, 'child': 0.15},
-    'milk': {'adult_male': 0.2, 'adult_female': 0.18, 'child': 0.3},
-    'potato': {'adult_male': 0.25, 'adult_female': 0.2, 'child': 0.15},
-    'onion': {'adult_male': 0.1, 'adult_female': 0.1, 'child': 0.05},
-    'lentils': {'adult_male': 0.15, 'adult_female': 0.12, 'child': 0.08},
-    'flour': {'adult_male': 0.2, 'adult_female': 0.18, 'child': 0.1},
-    'tea': {'adult_male': 0.01, 'adult_female': 0.01, 'child': 0.005},
-    'coffee': {'adult_male': 0.02, 'adult_female': 0.02, 'child': 0.0},
-    'almond': {'adult_male': 0.03, 'adult_female': 0.03, 'child': 0.01},
-    'sugar': {'adult_male': 0.05, 'adult_female': 0.05, 'child': 0.03},
+    "rice": {"adult_male": 0.3, "adult_female": 0.25, "child": 0.15},
+    "milk": {"adult_male": 0.2, "adult_female": 0.18, "child": 0.3},
+    "potato": {"adult_male": 0.25, "adult_female": 0.2, "child": 0.15},
+    "onion": {"adult_male": 0.1, "adult_female": 0.1, "child": 0.05},
+    "lentils": {"adult_male": 0.15, "adult_female": 0.12, "child": 0.08},
+    "flour": {"adult_male": 0.2, "adult_female": 0.18, "child": 0.1},
+    "tea": {"adult_male": 0.01, "adult_female": 0.01, "child": 0.005},
+    "coffee": {"adult_male": 0.02, "adult_female": 0.02, "child": 0.0},
+    "almond": {"adult_male": 0.03, "adult_female": 0.03, "child": 0.01},
+    "sugar": {"adult_male": 0.05, "adult_female": 0.05, "child": 0.03},
 }
 
 UNIT_CONVERSION_FACTORS = {
-    'kg': 1.0, 'kilogram': 1.0, 'kilograms': 1.0,
-    'g': 0.001, 'gram': 0.001, 'grams': 0.001,
-    'l': 1.0, 'litre': 1.0, 'litres': 1.0, 'lt': 1.0,
-    'ml': 0.001, 'millilitre': 0.001, 'millilitres': 0.001,
-    'pcs': 1.0, 'piece': 1.0,
+    "kg": 1.0,
+    "kilogram": 1.0,
+    "kilograms": 1.0,
+    "g": 0.001,
+    "gram": 0.001,
+    "grams": 0.001,
+    "l": 1.0,
+    "litre": 1.0,
+    "litres": 1.0,
+    "lt": 1.0,
+    "ml": 0.001,
+    "millilitre": 0.001,
+    "millilitres": 0.001,
+    "pcs": 1.0,
+    "piece": 1.0,
+    "pieces": 1.0,
 }
 
-le_region = LabelEncoder().fit(REGIONS)
-le_season = LabelEncoder().fit(SEASONS)
-le_event = LabelEncoder().fit(EVENTS)
-le_product = None
-scaler = None
+CATEGORICAL_FEATURES = ["product", "region", "season", "event"]
+NUMERIC_FEATURES = [
+    "adult_male",
+    "adult_female",
+    "child",
+    "family_size",
+    "base_consumption",
+    "month",
+    "day_of_week",
+]
+TARGET = "consumption"
+
+_model: Pipeline | None = None
+_metadata: dict[str, Any] = {}
 
 
-# 4. UTILITIES & DATA FUNCTIONS
+@dataclass(frozen=True)
+class PredictionResult:
+    daily_consumption: float
+    days_to_finish: float
+    predicted_finish_date: date
 
-def get_season(dt_obj):
+
+def get_season(dt_obj: date | datetime) -> str:
     month = dt_obj.month
-    if month in [12, 1, 2]: return 'winter'
-    elif month in [3, 4, 5]: return 'spring'
-    elif month in [6, 7, 8]: return 'summer'
-    return 'autumn'
+    if month in (12, 1, 2):
+        return "winter"
+    if month in (3, 4, 5):
+        return "spring"
+    if month in (6, 7, 8):
+        return "summer"
+    return "autumn"
 
-def generate_family():
+
+def normalize_text(value: str | None, default: str) -> str:
+    value = (value or default).strip().lower()
+    return value or default
+
+
+def validate_choice(name: str, value: str, allowed: tuple[str, ...]) -> str:
+    normalized = normalize_text(value, allowed[0])
+    if normalized not in allowed:
+        allowed_values = ", ".join(allowed)
+        raise ValueError(f"Invalid {name} '{value}'. Allowed values: {allowed_values}.")
+    return normalized
+
+
+def normalize_unit(unit: str | None) -> str:
+    normalized = normalize_text(unit, "kg")
+    if normalized not in UNIT_CONVERSION_FACTORS:
+        allowed_values = ", ".join(sorted(UNIT_CONVERSION_FACTORS))
+        raise ValueError(f"Invalid unit '{unit}'. Allowed values: {allowed_values}.")
+    return normalized
+
+
+def quantity_to_base_unit(quantity: float, unit: str | None) -> float:
+    normalized_unit = normalize_unit(unit)
+    return float(quantity) * UNIT_CONVERSION_FACTORS[normalized_unit]
+
+
+def family_to_dict(family: Any) -> dict[str, int]:
+    if family is None:
+        return {"adult_male": 1, "adult_female": 1, "child": 0}
+    if isinstance(family, Mapping):
+        data = dict(family)
+    elif hasattr(family, "model_dump"):
+        data = family.model_dump()
+    elif hasattr(family, "dict"):
+        data = family.dict()
+    else:
+        raise ValueError("Family data must include adult_male, adult_female, and child.")
     return {
-        'adult_male': random.randint(1, 3),
-        'adult_female': random.randint(1, 3),
-        'child': random.randint(0, 3)
-    }, random.choice(REGIONS)
-
-def calculate_base_consumption(fam, region, season, event, product):
-    base = BASE_CONSUMPTION.get(product, {'adult_male': 0.05, 'adult_female': 0.05, 'child': 0.02})
-    total = sum(base.get(k, 0) * fam.get(k, 0) for k in ['adult_male', 'adult_female', 'child'])
-    total *= REGION_MULTIPLIER.get(region, 1.0)
-    total *= SEASON_MULTIPLIER.get(season, 1.0)
-    total *= EVENT_MULTIPLIER.get(event, 1.0)
-    total *= np.random.normal(1, 0.05)
-    return max(total, 0.01)
-
-def generate_data(products, families=3, days=180):
-    data = []
-    for _ in range(families):
-        fam, region = generate_family()
-        start = datetime.today() - timedelta(days=days)
-        for d in range(days):
-            date_obj = start + timedelta(days=d)
-            season = get_season(date_obj)
-            event = random.choices(EVENTS, weights=[70,5,5,5,5,10], k=1)[0]
-            for prod in products:
-                cons = calculate_base_consumption(fam, region, season, event, prod)
-                data.append({
-                    'date': date_obj.strftime('%Y-%m-%d'),
-                    'product': prod, 'region': region, 'season': season, 'event': event,
-                    'adult_male': fam['adult_male'], 'adult_female': fam['adult_female'], 'child': fam['child'],
-                    'consumption': cons
-                })
-    return pd.DataFrame(data)
-
-def is_new_product(product, existing_df):
-    return product not in existing_df['product'].unique()
-
-def generate_and_append_new_product(product, csv_path=DATA_PATH):
-    print(f"Generating synthetic data for new product: {product}")
-    new_df = generate_data([product], families=3, days=180)
-    if os.path.exists(csv_path):
-        existing = pd.read_csv(csv_path)
-        combined = pd.concat([existing, new_df], ignore_index=True)
-    else:
-        combined = new_df
-    combined.to_csv(csv_path, index=False)
-    print(f"Product '{product}' added to dataset.")
-
-def get_user_details(user_id):
-    try:
-        response = supabase.table("users").select("*").eq("user_id", user_id).single().execute()
-        return response.data
-    except Exception as e:
-        print(f"Could not fetch user details for {user_id}: {e}")
-        return None
-
-def record_actual_finish_date(stock_id: uuid.UUID, actual_finish_date: date):
-    try:
-        update_result = supabase.table("user_stocks").update({
-            "actual_finish_date": actual_finish_date.isoformat(),
-            "is_verified": True # Mark as verified for retraining
-        }).eq("stock_id", str(stock_id)).execute()
-        return bool(update_result.data)
-    except Exception as e:
-        print(f"Error recording feedback: {e}")
-        return False
-
-# 5. MODELING
-
-
-def prepare_data(df, products, existing_scaler=None):
-    global le_product
-    le_product = LabelEncoder().fit(products)
-    df['region_enc'] = le_region.transform(df['region'])
-    df['season_enc'] = le_season.transform(df['season'])
-    df['event_enc'] = le_event.transform(df['event'])
-    df['product_enc'] = le_product.transform(df['product'])
-
-    df['date'] = pd.to_datetime(df['date'])
-    df = df.sort_values('date')
-    
-    features_to_scale = ['adult_male', 'adult_female', 'child', 'consumption']
-    
-    if existing_scaler:
-        scaler_to_use = existing_scaler
-    else:
-        scaler_to_use = MinMaxScaler()
-        # Fit only on the training data
-        df[features_to_scale] = scaler_to_use.fit_transform(df[features_to_scale])
-    
-    X, y = [], []
-    seq_len = 7
-    feature_cols = ['adult_male', 'adult_female', 'child', 'region_enc', 'season_enc', 'event_enc', 'product_enc']
-    for p in df['product_enc'].unique():
-        sub = df[df['product_enc'] == p].reset_index(drop=True)
-        # We need to scale the features for the sub-dataframe
-        sub[features_to_scale] = scaler_to_use.transform(sub[features_to_scale])
-        feats = sub[feature_cols].values
-        c = sub['consumption'].values
-        
-        for i in range(len(sub) - seq_len):
-            X.append(feats[i:i + seq_len])
-            y.append(c[i + seq_len])
-            
-    return np.array(X), np.array(y), scaler_to_use
-
-
-def build_model(input_shape):
-    inp = Input(shape=input_shape)
-    x = LSTM(64, return_sequences=True)(inp)
-    x = LSTM(32)(x)
-    x = Dense(16, activation='relu')(x)
-    out = Dense(1, name='daily_consumption_output')(x)
-    model = Model(inputs=inp, outputs=out)
-    model.compile(optimizer='adam', loss='mse')
-    return model
-
-# retrain the model 
-def retrain_model_with_feedback(user_id):
-    """
-    Fetches verified feedback for a user, calculates actual consumption,
-    and retrains the global model with this new, high-quality data.
-    """
-    global ml_model, scaler
-
-    print(f"Starting retraining process for user: {user_id}")
-
-    # 1. Fetch Verified Feedback Data from Supabase
-    try:
-        feedback_res = supabase.table("user_stocks").select("*").eq("user_id", user_id).eq("is_verified", True).execute()
-        if not feedback_res.data:
-            return {"success": False, "message": "No new verified feedback found to retrain the model."}
-    except Exception as e:
-        return {"success": False, "message": f"Database error fetching feedback: {e}"}
-
-    # 2. Get User's Family Details
-    user_details = get_user_details(user_id)
-    if not user_details:
-        return {"success": False, "message": f"Could not find user details for user ID: {user_id}"}
-    
-    family_data = {
-        "adult_male": user_details.get("adult_male", 1),
-        "adult_female": user_details.get("adult_female", 1),
-        "child": user_details.get("child", 0)
+        "adult_male": max(int(data.get("adult_male", 0)), 0),
+        "adult_female": max(int(data.get("adult_female", 0)), 0),
+        "child": max(int(data.get("child", 0)), 0),
     }
-    region = user_details.get("region", "urban")
-
-    # 3. Process Feedback and Create New Training Data
-    new_training_data = []
-    for record in feedback_res.data:
-        try:
-            purchase_date_str = record['purchase_date']
-            actual_finish_date_str = record['actual_finish_date']
-
-            purchase_date = datetime.fromisoformat(purchase_date_str.replace('Z', '+00:00')).date()
-            actual_finish_date = datetime.fromisoformat(actual_finish_date_str.replace('Z', '+00:00')).date()
-
-            duration_days = (actual_finish_date - purchase_date).days
-            if duration_days <= 0:
-                continue
-
-            unit = (record.get('unit') or 'kg').lower()
-            conversion_factor = UNIT_CONVERSION_FACTORS.get(unit, 1.0)
-            quantity_in_kg = record['quantity'] * conversion_factor
-            
-            actual_daily_consumption = quantity_in_kg / duration_days
-
-            # --- THE FIX IS APPLIED HERE ---
-            # Generate 3 months of data for each feedback item to give it more weight.
-            # This makes the model pay much more attention to the real data.
-            for i in range(90): 
-                day = purchase_date + timedelta(days=i % duration_days) # Cycle through the actual duration
-                new_training_data.append({
-                    'date': day.strftime('%Y-%m-%d'),
-                    'product': record['product_name'],
-                    'region': region,
-                    'season': record.get('season') or get_season(day),
-                    'event': record.get('household_events') or 'normal',
-                    'adult_male': family_data['adult_male'],
-                    'adult_female': family_data['adult_female'],
-                    'child': family_data['child'],
-                    'consumption': actual_daily_consumption
-                })
-        except (ValueError, TypeError) as e:
-            print(f"Skipping record due to invalid date format or null value: {record['stock_id']} - {e}")
-            continue
 
 
-    if not new_training_data:
-        return {"success": False, "message": "No valid feedback could be processed."}
+def calculate_base_consumption(
+    family: Mapping[str, int],
+    region: str,
+    season: str,
+    event: str,
+    product: str,
+) -> float:
+    base = BASE_CONSUMPTION.get(
+        product,
+        {"adult_male": 0.08, "adult_female": 0.07, "child": 0.04},
+    )
+    total = sum(base.get(member, 0.0) * family.get(member, 0) for member in family)
+    region_multiplier = {"urban": 1.0, "rural": 1.1}.get(region, 1.0)
+    season_multiplier = {
+        "winter": 1.1,
+        "spring": 1.0,
+        "summer": 0.9,
+        "autumn": 1.0,
+    }.get(season, 1.0)
+    event_multiplier = {
+        "normal": 1.0,
+        "fasting": 0.7,
+        "guests": 1.3,
+        "sickness": 0.5,
+        "travel": 0.3,
+        "meal_off": 0.2,
+    }.get(event, 1.0)
+    return max(total * region_multiplier * season_multiplier * event_multiplier, 0.001)
 
-    # 4. Combine with Existing Data and Retrain
-    new_df = pd.DataFrame(new_training_data)
-    
-    if os.path.exists(DATA_PATH):
-        existing_df = pd.read_csv(DATA_PATH)
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+
+def load_training_data(data_path: Path = DATA_PATH) -> pd.DataFrame:
+    if not data_path.exists():
+        raise FileNotFoundError(f"Training data not found: {data_path}")
+    df = pd.read_csv(data_path)
+    required = set(CATEGORICAL_FEATURES + ["adult_male", "adult_female", "child", "date", TARGET])
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"Training data is missing required columns: {', '.join(missing)}")
+    return clean_training_data(df)
+
+
+def clean_training_data(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date", TARGET, "product", "region", "season", "event"])
+
+    for column in CATEGORICAL_FEATURES:
+        df[column] = df[column].astype(str).str.strip().str.lower()
+
+    for column in ["adult_male", "adult_female", "child", TARGET]:
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    df = df.dropna(subset=["adult_male", "adult_female", "child", TARGET])
+    df = df[df[TARGET] > 0]
+    df = df[df["region"].isin(REGIONS)]
+    df = df[df["season"].isin(SEASONS)]
+    df = df[df["event"].isin(EVENTS)]
+    return add_features(df)
+
+
+def add_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["family_size"] = df["adult_male"] + df["adult_female"] + df["child"]
+    df["month"] = df["date"].dt.month
+    df["day_of_week"] = df["date"].dt.dayofweek
+    df["base_consumption"] = [
+        calculate_base_consumption(
+            {
+                "adult_male": int(row.adult_male),
+                "adult_female": int(row.adult_female),
+                "child": int(row.child),
+            },
+            row.region,
+            row.season,
+            row.event,
+            row.product,
+        )
+        for row in df.itertuples(index=False)
+    ]
+    return df
+
+
+def build_pipeline(model_type: str = "hist_gradient_boosting") -> Pipeline:
+    try:
+        encoder = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    except TypeError:
+        encoder = OneHotEncoder(handle_unknown="ignore", sparse=False)
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("categorical", encoder, CATEGORICAL_FEATURES),
+            ("numeric", "passthrough", NUMERIC_FEATURES),
+        ],
+        remainder="drop",
+    )
+
+    if model_type == "random_forest":
+        regressor = RandomForestRegressor(
+            n_estimators=250,
+            min_samples_leaf=2,
+            random_state=42,
+            n_jobs=-1,
+        )
     else:
-        combined_df = new_df
-    
-    combined_df.drop_duplicates(subset=['date', 'product', 'region', 'season', 'event', 'adult_male', 'adult_female', 'child'], keep='last', inplace=True)
-    
-    print(f"Retraining model with {len(existing_df)} existing records and {len(new_df)} new (weighted) feedback records.")
+        regressor = HistGradientBoostingRegressor(
+            learning_rate=0.06,
+            max_iter=350,
+            l2_regularization=0.01,
+            random_state=42,
+        )
 
-    # 5. Re-prepare all data and retrain the model
-    products = combined_df['product'].unique().tolist()
-    # We must re-fit a new scaler on the combined data, as the new real data might be outside the original scale
-    X, y, new_scaler = prepare_data(combined_df, products, existing_scaler=None) 
-    
-    if X.shape[0] == 0:
-       return {"success": False, "message": "Not enough combined data to retrain the model."}
-    
-    # Increase epochs to let the model learn the new, weighted data more thoroughly.
-    ml_model.fit(X, y, epochs=20, batch_size=32, validation_split=0.1, verbose=1)
-    
-    # 6. Save the new, improved model and scaler
-    ml_model.save(MODEL_PATH)
-    joblib.dump(new_scaler, SCALER_PATH)
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("regressor", regressor),
+        ]
+    )
 
-    # Update the global scaler variable for the current session
-    scaler = new_scaler
-    
-    # Mark feedback as used
-    stock_ids_used = [str(r['stock_id']) for r in feedback_res.data if r['stock_id']]
-    supabase.table("user_stocks").update({"is_verified": False}).in_("stock_id", stock_ids_used).execute()
-    
-    return {"success": True, "message": f"Model retrained successfully with {len(new_df)} new data points."}
 
-def load_or_train_model():
-    global scaler
-    if not os.path.exists(DATA_PATH) or os.path.getsize(DATA_PATH) == 0:
-        df = generate_data(list(BASE_CONSUMPTION.keys()))
-        df.to_csv(DATA_PATH, index=False)
-    else:
-        df = pd.read_csv(DATA_PATH)
+def train_model(
+    data_path: Path = DATA_PATH,
+    model_path: Path = MODEL_PATH,
+    metrics_path: Path = METRICS_PATH,
+    model_type: str = "hist_gradient_boosting",
+) -> dict[str, Any]:
+    global _model, _metadata
 
-    products = df['product'].unique().tolist()
-    X, y, scaler_obj = prepare_data(df, products)
-    
-    if X.shape[0] == 0:
-       raise ValueError("Not enough data for training.")
-       
-    scaler = scaler_obj
-    model = build_model((X.shape[1], X.shape[2]))
-    model.fit(X, y, epochs=15, batch_size=32, validation_split=0.1, verbose=1)
-    
-    model.save(MODEL_PATH)
-    joblib.dump(scaler, SCALER_PATH)
-    print("✅ Model/scaler trained and saved.")
-    return model
+    df = load_training_data(data_path)
+    train_df, test_df = train_test_split(
+        df,
+        test_size=0.2,
+        random_state=42,
+        stratify=df["product"],
+    )
 
-# 6. PREDICTION & RECORDING
+    pipeline = build_pipeline(model_type=model_type)
+    pipeline.fit(train_df[CATEGORICAL_FEATURES + NUMERIC_FEATURES], train_df[TARGET])
 
-def predict_and_record_stock(input_data):
-    # This function's logic remains correct and does not need changes.
-    # It will now use the retrained model and scaler automatically.
-    global le_product, scaler, ml_model
+    metrics = evaluate_pipeline(pipeline, test_df)
+    metadata = {
+        "model_type": model_type,
+        "trained_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "rows": int(len(df)),
+        "train_rows": int(len(train_df)),
+        "test_rows": int(len(test_df)),
+        "products": sorted(df["product"].unique().tolist()),
+        "features": CATEGORICAL_FEATURES + NUMERIC_FEATURES,
+        "metrics": metrics,
+    }
 
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"pipeline": pipeline, "metadata": metadata}, model_path)
+    metrics_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    _model = pipeline
+    _metadata = metadata
+    return metadata
+
+
+def evaluate_pipeline(pipeline: Pipeline, df: pd.DataFrame) -> dict[str, Any]:
+    features = df[CATEGORICAL_FEATURES + NUMERIC_FEATURES]
+    actual = df[TARGET].to_numpy()
+    predicted = np.clip(pipeline.predict(features), 0.001, None)
+
+    absolute_error = np.abs(actual - predicted)
+    percentage_error = absolute_error / np.maximum(actual, 0.001) * 100
+
+    by_product: dict[str, dict[str, float]] = {}
+    for product, group in df.assign(predicted=predicted).groupby("product"):
+        group_actual = group[TARGET].to_numpy()
+        group_predicted = group["predicted"].to_numpy()
+        by_product[product] = {
+            "mae": round(float(mean_absolute_error(group_actual, group_predicted)), 4),
+            "mape": round(
+                float(np.mean(np.abs(group_actual - group_predicted) / np.maximum(group_actual, 0.001)) * 100),
+                2,
+            ),
+        }
+
+    rmse = float(np.sqrt(mean_squared_error(actual, predicted)))
+    return {
+        "mae": round(float(mean_absolute_error(actual, predicted)), 4),
+        "rmse": round(rmse, 4),
+        "r2": round(float(r2_score(actual, predicted)), 4),
+        "mape": round(float(np.mean(percentage_error)), 2),
+        "median_absolute_error": round(float(np.median(absolute_error)), 4),
+        "by_product": by_product,
+    }
+
+
+def load_model() -> Pipeline:
+    global _model, _metadata
+
+    if _model is not None:
+        return _model
+    if not MODEL_PATH.exists():
+        train_model()
+
+    artifact = joblib.load(MODEL_PATH)
+    _model = artifact["pipeline"]
+    _metadata = artifact.get("metadata", {})
+    return _model
+
+
+def get_model_metadata() -> dict[str, Any]:
+    load_model()
+    return dict(_metadata)
+
+
+def get_supabase_client():
+    from supabase_client import get_supabase
+
+    return get_supabase()
+
+
+def get_user_details(user_id: str) -> dict[str, Any] | None:
+    response = (
+        get_supabase_client()
+        .table("users")
+        .select("*")
+        .eq("user_id", user_id)
+        .single()
+        .execute()
+    )
+    return response.data
+
+
+def build_prediction_frame(
+    product_name: str,
+    family: Mapping[str, int],
+    region: str,
+    season: str,
+    event: str,
+    purchase_date: date,
+) -> pd.DataFrame:
+    product = normalize_text(product_name, "unknown")
+    region = validate_choice("region", region, REGIONS)
+    season = validate_choice("season", season, SEASONS)
+    event = validate_choice("event", event, EVENTS)
+
+    frame = pd.DataFrame(
+        [
+            {
+                "date": pd.Timestamp(purchase_date),
+                "product": product,
+                "region": region,
+                "season": season,
+                "event": event,
+                "adult_male": family["adult_male"],
+                "adult_female": family["adult_female"],
+                "child": family["child"],
+                TARGET: 1.0,
+            }
+        ]
+    )
+    return add_features(frame)[CATEGORICAL_FEATURES + NUMERIC_FEATURES]
+
+
+def predict_depletion(
+    product_name: str,
+    quantity: float,
+    unit: str,
+    purchase_date: date,
+    family: Mapping[str, int],
+    region: str,
+    season: str,
+    event: str,
+) -> PredictionResult:
+    if quantity <= 0:
+        raise ValueError("Quantity must be greater than 0.")
+
+    model = load_model()
+    quantity_in_base_unit = quantity_to_base_unit(quantity, unit)
+    features = build_prediction_frame(product_name, family, region, season, event, purchase_date)
+    daily_consumption = max(float(model.predict(features)[0]), 0.001)
+    days_to_finish = quantity_in_base_unit / daily_consumption
+
+    return PredictionResult(
+        daily_consumption=daily_consumption,
+        days_to_finish=days_to_finish,
+        predicted_finish_date=purchase_date + timedelta(days=days_to_finish),
+    )
+
+
+def predict_and_record_stock(input_data: Any) -> dict[str, Any]:
     user_details = get_user_details(input_data.user_id)
     if not user_details:
         raise ValueError(f"User with ID {input_data.user_id} not found.")
 
-    family_data = input_data.family.dict() if input_data.family else {
-        "adult_male": user_details.get("adult_male", 1),
-        "adult_female": user_details.get("adult_female", 1),
-        "child": user_details.get("child", 0)
-    }
-    
+    family = family_to_dict(input_data.family) if input_data.family else family_to_dict(user_details)
     region = input_data.region or user_details.get("region", "urban")
+    season = input_data.season or get_season(input_data.purchase_date)
     event = input_data.event or "normal"
-    season = get_season(input_data.purchase_date)
 
-    initial_df = pd.read_csv(DATA_PATH)
-    if is_new_product(input_data.product_name, initial_df):
-        generate_and_append_new_product(input_data.product_name)
-        initial_df = pd.read_csv(DATA_PATH)
-    
-    products = initial_df['product'].unique().tolist()
-    le_product = LabelEncoder().fit(products)
-
-    product_enc = le_product.transform([input_data.product_name])[0]
-    
-    raw_demographics = [family_data['adult_male'], family_data['adult_female'], family_data['child']]
-
-    base_cons = calculate_base_consumption(
-        family_data, region, season, event, input_data.product_name
+    prediction = predict_depletion(
+        product_name=input_data.product_name,
+        quantity=input_data.quantity,
+        unit=input_data.unit,
+        purchase_date=input_data.purchase_date,
+        family=family,
+        region=region,
+        season=season,
+        event=event,
     )
 
-    df_for_scaling = pd.DataFrame(
-        [raw_demographics + [base_cons]],
-        columns=['adult_male', 'adult_female', 'child', 'consumption']
-    )
-    scaled_values = scaler.transform(df_for_scaling)
-
-    region_enc = le_region.transform([region])[0]
-    season_enc = le_season.transform([season])[0]
-    event_enc = le_event.transform([event])[0]
-    
-    features = list(scaled_values[0, :3]) + [region_enc, season_enc, event_enc, product_enc]
-    vec = np.array([features] * 7)[np.newaxis, :, :]
-
-    scaled_prediction = ml_model.predict(vec, verbose=0)[0][0]
-    dummy_array_for_inverse = np.zeros((1, 4))
-    dummy_array_for_inverse[0, 3] = scaled_prediction
-    daily_consumption_in_kg = max(scaler.inverse_transform(dummy_array_for_inverse)[0, 3], 0.001)
-
-    unit = (input_data.unit or 'kg').lower()
-    conversion_factor = UNIT_CONVERSION_FACTORS.get(unit, 1.0)
-    quantity_in_kg = input_data.quantity * conversion_factor
-    
-    print(f"Unit Conversion: Received {input_data.quantity} {unit}. Calculating with {quantity_in_kg:.3f} kg.")
-    print(f"Predicted Daily Consumption for {input_data.product_name}: {daily_consumption_in_kg:.3f} kg/day")
-
-    days_to_finish = quantity_in_kg / daily_consumption_in_kg
-    predicted_finish_date = input_data.purchase_date + timedelta(days=days_to_finish)
-    
     stock_entry = {
         "user_id": input_data.user_id,
-        "product_name": input_data.product_name,
-        "unit": input_data.unit,
-        "quantity": input_data.quantity,
+        "product_name": normalize_text(input_data.product_name, "unknown"),
+        "unit": normalize_unit(input_data.unit),
+        "quantity": float(input_data.quantity),
         "purchase_date": input_data.purchase_date.isoformat(),
-        "household_events": event,
-        "season": season,
-        "predicted_finish_date": predicted_finish_date.isoformat()
+        "household_events": validate_choice("event", event, EVENTS),
+        "season": validate_choice("season", season, SEASONS),
+        "predicted_finish_date": prediction.predicted_finish_date.isoformat(),
     }
-    
-    stock_insert_result = supabase.table("user_stocks").insert(stock_entry).execute()
 
-    if not stock_insert_result.data:
-        raise Exception(f"Failed to insert stock record: {stock_insert_result.error}")
+    response = get_supabase_client().table("user_stocks").insert(stock_entry).execute()
+    if not response.data:
+        raise RuntimeError("Failed to insert stock record.")
 
-    new_stock_id = stock_insert_result.data[0]['stock_id']
-    
     return {
-        "stock_id": new_stock_id,
-        "predicted_finish_date": predicted_finish_date,
-        "product_name": input_data.product_name
+        "stock_id": response.data[0]["stock_id"],
+        "predicted_finish_date": prediction.predicted_finish_date.isoformat(),
+        "daily_consumption": prediction.daily_consumption,
+        "days_to_finish": prediction.days_to_finish,
     }
-    
-def recalculate_depletion(input_data):
-    # This function's logic is also fine and will use the retrained model.
-    global scaler, ml_model
-    #... (rest of the function is unchanged and correct)
-    family_dict = input_data.family.dict()
-    initial_df = pd.read_csv(DATA_PATH)
-    if is_new_product(input_data.product_name, initial_df):
-        generate_and_append_new_product(input_data.product_name)
-        initial_df = pd.read_csv(DATA_PATH)
 
-    current_products_list = initial_df['product'].unique().tolist()
-    local_le_product = LabelEncoder().fit(current_products_list)
-    
-    try:
-        product_enc = local_le_product.transform([input_data.product_name])[0]
-    except ValueError:
-        raise ValueError(f"Could not encode product '{input_data.product_name}'.")
-    
-    raw_demographics = [family_dict['adult_male'], family_dict['adult_female'], family_dict['child']]
 
-    base_cons = calculate_base_consumption(
-        family_dict, input_data.region, input_data.season, input_data.event, input_data.product_name
+def recalculate_depletion(input_data: Any) -> str:
+    prediction = predict_depletion(
+        product_name=input_data.product_name,
+        quantity=input_data.quantity,
+        unit=input_data.unit,
+        purchase_date=date.today(),
+        family=family_to_dict(input_data.family),
+        region=input_data.region,
+        season=input_data.season,
+        event=input_data.event,
     )
-    
-    df_for_scaling = pd.DataFrame(
-        [raw_demographics + [base_cons]],
-        columns=['adult_male', 'adult_female', 'child', 'consumption']
+    return prediction.predicted_finish_date.isoformat()
+
+
+def record_actual_finish_date(stock_id: uuid.UUID, actual_finish_date: date) -> bool:
+    response = (
+        get_supabase_client()
+        .table("user_stocks")
+        .update({"actual_finish_date": actual_finish_date.isoformat(), "is_verified": True})
+        .eq("stock_id", str(stock_id))
+        .execute()
     )
-    scaled_values = scaler.transform(df_for_scaling)
-    
-    region_enc = le_region.transform([input_data.region])[0]
-    season_enc = le_season.transform([input_data.season])[0]
-    event_enc = le_event.transform([input_data.event])[0]
-    
-    features = list(scaled_values[0, :3]) + [region_enc, season_enc, event_enc, product_enc]
-    vec = np.array([features] * 7)[np.newaxis, :, :]
-
-    scaled_prediction = ml_model.predict(vec, verbose=0)[0][0]
-    dummy_array_for_inverse = np.zeros((1, 4))
-    dummy_array_for_inverse[0, 3] = scaled_prediction
-    daily_consumption_in_kg = max(scaler.inverse_transform(dummy_array_for_inverse)[0, 3], 0.001)
-
-    unit = (input_data.unit or 'kg').lower()
-    conversion_factor = UNIT_CONVERSION_FACTORS.get(unit, 1.0)
-    quantity_in_kg = input_data.quantity * conversion_factor
-    
-    days_to_finish = quantity_in_kg / daily_consumption_in_kg
-    predicted_finish_date = datetime.today().date() + timedelta(days=days_to_finish)
-
-    return predicted_finish_date.isoformat()
+    return bool(response.data)
 
 
-# 8. GLOBAL LOADING FOR FASTAPI
-if os.path.exists(MODEL_PATH) and os.path.exists(SCALER_PATH):
-    try:
-        ml_model = tf.keras.models.load_model(MODEL_PATH)
-        scaler = joblib.load(SCALER_PATH)
-        print("✅ Loaded trained model and scaler for prediction.")
-    except Exception as e:
-        print(f"Error loading model/scaler, retraining... Error: {e}")
-        ml_model = load_or_train_model()
-else:
-    print("Model or scaler not found, initiating training...")
-    ml_model = load_or_train_model()
+def retrain_model_with_feedback(user_id: str) -> dict[str, Any]:
+    response = (
+        get_supabase_client()
+        .table("user_stocks")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("is_verified", True)
+        .execute()
+    )
+    if not response.data:
+        return {"success": False, "message": "No verified feedback found to retrain the model."}
+
+    feedback_rows = []
+    user_details = get_user_details(user_id) or {}
+    family = family_to_dict(user_details)
+    region = validate_choice("region", user_details.get("region", "urban"), REGIONS)
+
+    for record in response.data:
+        try:
+            purchase_date = datetime.fromisoformat(str(record["purchase_date"]).replace("Z", "+00:00")).date()
+            actual_finish_date = datetime.fromisoformat(
+                str(record["actual_finish_date"]).replace("Z", "+00:00")
+            ).date()
+            duration_days = max((actual_finish_date - purchase_date).days, 1)
+            daily_consumption = quantity_to_base_unit(float(record["quantity"]), record.get("unit")) / duration_days
+            season = validate_choice("season", record.get("season") or get_season(purchase_date), SEASONS)
+            event = validate_choice("event", record.get("household_events") or "normal", EVENTS)
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        for offset in range(duration_days):
+            day = purchase_date + timedelta(days=offset)
+            feedback_rows.append(
+                {
+                    "date": day.isoformat(),
+                    "product": normalize_text(record.get("product_name"), "unknown"),
+                    "region": region,
+                    "season": season,
+                    "event": event,
+                    "adult_male": family["adult_male"],
+                    "adult_female": family["adult_female"],
+                    "child": family["child"],
+                    TARGET: daily_consumption,
+                }
+            )
+
+    if not feedback_rows:
+        return {"success": False, "message": "No valid feedback rows could be processed."}
+
+    existing = pd.read_csv(DATA_PATH)
+    combined = pd.concat([existing, pd.DataFrame(feedback_rows)], ignore_index=True)
+    train_model_from_dataframe(combined)
+
+    stock_ids = [str(record["stock_id"]) for record in response.data if record.get("stock_id")]
+    if stock_ids:
+        get_supabase_client().table("user_stocks").update({"is_verified": False}).in_("stock_id", stock_ids).execute()
+
+    return {"success": True, "message": f"Model retrained with {len(feedback_rows)} feedback rows."}
+
+
+def train_model_from_dataframe(df: pd.DataFrame) -> dict[str, Any]:
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = ARTIFACT_DIR / "combined_training_data.csv"
+    df.to_csv(temp_path, index=False)
+    return train_model(data_path=temp_path)

@@ -1,13 +1,24 @@
 import os
+
 from dotenv import load_dotenv
-from supabase import create_client, Client
+from supabase import Client, create_client
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+_client: Client | None = None
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise EnvironmentError("SUPABASE_URL or SUPABASE_KEY not set in environment variables.")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+def get_supabase() -> Client:
+    global _client
+
+    if _client is not None:
+        return _client
+
+    supabase_url = os.getenv("SUPABASE_URL")
+    supabase_key = os.getenv("SUPABASE_KEY")
+    if not supabase_url or not supabase_key:
+        raise EnvironmentError("SUPABASE_URL and SUPABASE_KEY must be set for database-backed endpoints.")
+
+    _client = create_client(supabase_url, supabase_key)
+    return _client
+

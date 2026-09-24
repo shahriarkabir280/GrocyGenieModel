@@ -1,133 +1,132 @@
+from datetime import date
+from typing import Literal
+import uuid
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import Dict, Optional
-from datetime import datetime, date
-import uuid
-import model  #existing model.py
-import joblib
-import tensorflow as tf
 
-app = FastAPI()
+import model
 
-# Load or train model at startup
-ml_model = model.load_or_train_model()
-SCALER_PATH = "/tmp/scaler.pkl"
+app = FastAPI(
+    title="GrocyGenie Model API",
+    description="Predict grocery depletion dates from household context and stock quantities.",
+    version="1.0.0",
+)
 
+Region = Literal["urban", "rural"]
+Season = Literal["winter", "spring", "summer", "autumn"]
+Event = Literal["normal", "fasting", "guests", "sickness", "travel", "meal_off"]
 
-# Request & Response Schemas
 
 class FamilyInput(BaseModel):
-    adult_male: int
-    adult_female: int
-    child: int
+    adult_male: int = Field(ge=0)
+    adult_female: int = Field(ge=0)
+    child: int = Field(ge=0)
+
 
 class StockAdditionInput(BaseModel):
-    """Schema for adding a new stock item and getting a prediction."""
-    user_id: str
-    product_name: str
-    quantity: float = Field(..., gt=0) # Quantity must be greater than 0
-    unit: str = 'kg'
+    user_id: str = Field(min_length=1)
+    product_name: str = Field(min_length=1)
+    quantity: float = Field(gt=0)
+    unit: str = "kg"
     purchase_date: date
-    # Optional context fields; if not provided, they can be fetched from the user's profile
-    region: Optional[str] = None
-    season: Optional[str] = None
-    event: Optional[str] = None
-    family: Optional[FamilyInput] = None
+    region: Region | None = None
+    season: Season | None = None
+    event: Event | None = None
+    family: FamilyInput | None = None
+
 
 class RePredictionInput(BaseModel):
-    user_id: str
-    product_name: str
-    quantity: float
-    unit: str
-    # The following are needed for the model to predict consumption
-    region: str
-    season: str
-    event: str
+    product_name: str = Field(min_length=1)
+    quantity: float = Field(gt=0)
+    unit: str = "kg"
+    region: Region
+    season: Season
+    event: Event
     family: FamilyInput
 
+
 class RetrainRequest(BaseModel):
-    user_id: str
+    user_id: str = Field(min_length=1)
+
 
 class FeedbackInput(BaseModel):
     stock_id: uuid.UUID
     actual_finish_date: date
 
-# -------------------------
-# API Routes
-# -------------------------
+
+@app.on_event("startup")
+def warm_model() -> None:
+    model.load_model()
+
 
 @app.get("/")
 def read_root():
-    return {"message": "✅ GrocyGenie API is running."}
+    return {"message": "GrocyGenie API is running."}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "model_loaded": True}
+
+
+@app.get("/model/info")
+def model_info():
+    return model.get_model_metadata()
 
 
 @app.post("/stock/add")
 def add_stock_and_predict(input_data: StockAdditionInput):
-    """
-    Adds a new stock item for a user and predicts its depletion date.
-    This is the primary endpoint for making predictions.
-    """
     try:
-        # The model function now handles both prediction and DB insertion
         result = model.predict_and_record_stock(input_data)
-        
-        if not result:
-            raise HTTPException(status_code=500, detail="Failed to create stock record or make prediction.")
-
         return {
             "message": "Stock added and prediction complete.",
-            "stock_id": result['stock_id'],
+            "stock_id": result["stock_id"],
             "product_name": input_data.product_name,
-            "predicted_finish_date": result['predicted_finish_date']
+            "predicted_finish_date": result["predicted_finish_date"],
+            "daily_consumption": round(result["daily_consumption"], 4),
+            "days_to_finish": round(result["days_to_finish"], 2),
         }
-
-    except Exception as e:
-        # import traceback
-        # traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Failed to add stock and predict depletion.") from exc
 
 
 @app.post("/feedback")
 def record_feedback(feedback_data: FeedbackInput):
-    """
-    Receives feedback from the user about the actual finish date of a stock item.
-    """
-    success = model.record_actual_finish_date(
-        feedback_data.stock_id,
-        feedback_data.actual_finish_date
-    )
+    try:
+        success = model.record_actual_finish_date(
+            feedback_data.stock_id,
+            feedback_data.actual_finish_date,
+        )
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     if success:
         return {"message": "Feedback recorded successfully."}
-    else:
-        raise HTTPException(status_code=404, detail=f"Stock ID {feedback_data.stock_id} not found or update failed.")
+    raise HTTPException(status_code=404, detail=f"Stock ID {feedback_data.stock_id} not found or update failed.")
 
 
 @app.post("/retrain")
 def retrain_model(request: RetrainRequest):
-    """
-    Triggers model retraining using verified feedback for a specific user.
-    """
-    result = model.retrain_model_with_feedback(request.user_id)
+    try:
+        result = model.retrain_model_with_feedback(request.user_id)
+    except EnvironmentError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
     if result["success"]:
-        # Reload model and scaler globally for future predictions
-        # model.ml_model = tf.keras.models.load_model(model.MODEL_PATH)
-        # model.scaler = joblib.load(SCALER_PATH)
         return {"message": result["message"]}
-    else:
-        raise HTTPException(status_code=400, detail=result["message"])
-    
+    raise HTTPException(status_code=400, detail=result["message"])
+
+
 @app.post("/re-predict")
 def recalculate_prediction(input_data: RePredictionInput):
-    """
-    Calculates a new depletion date without touching the database.
-    This is a pure calculation service.
-    """
     try:
-        # Call the new model function that only does calculations
         new_finish_date = model.recalculate_depletion(input_data)
-        
-        return {
-            "predicted_finish_date": new_finish_date
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return {"predicted_finish_date": new_finish_date}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
