@@ -9,6 +9,10 @@ pinned: false
 license: apache-2.0
 ---
 
+<p align="center">
+  <img src="docs/banner.webp" alt="GrocyGenie: know when your groceries will run out" width="100%" />
+</p>
+
 # GrocyGenie Model API
 
 GrocyGenie is a machine learning API that predicts when a grocery item is likely
